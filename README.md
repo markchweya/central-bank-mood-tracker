@@ -26,7 +26,7 @@ It extends the method in the BIS paper [*Large language models: a primer for eco
 | Step | Status |
 | --- | --- |
 | Speech loader | done |
-| LLM sentiment scoring | built; accuracy check needs hand labels |
+| LLM sentiment scoring | done; checked against 200 reference labels |
 | Topic modelling | planned |
 | Monthly mood index | planned |
 | Macro data and forecast test | planned |
@@ -46,11 +46,12 @@ python -m mood_tracker.load_speeches   # writes data/processed/*.parquet
 
 ### Score sentiment
 
-Install [Ollama](https://ollama.com) and pull the default model with `ollama pull llama3.2:3b`. On a laptop CPU it labels a paragraph in about 5-8 seconds, so scoring works on a sample per country and month:
+Install [Ollama](https://ollama.com) and pull a model. `gemma4:latest` with prompt v3 is the most accurate local option we tested (84% stance, 73% outlook on held-out paragraphs, see [results/labeller_accuracy.md](results/labeller_accuracy.md)); `llama3.2:3b` is the default because it is smaller and a little faster. On a laptop CPU a paragraph takes about 7-12 seconds, so scoring works on a sample per country and month:
 
 ```bash
+ollama pull gemma4:latest
 # pilot: US and Kenya, 2 paragraphs per month since 2023
-python -m mood_tracker.score --countries US KE --start 2023 --per-month 2
+python -m mood_tracker.score --model gemma4:latest --countries US KE --start 2023 --per-month 2
 ```
 
 Runs are resumable: stop with Ctrl+C and the same command carries on. To use Claude instead, `pip install anthropic`, sign in with an API key, and add `--backend claude`.
@@ -59,7 +60,8 @@ Runs are resumable: stop with Ctrl+C and the same command carries on. To use Cla
 
 ```bash
 python -m mood_tracker.validate export --n 200     # writes a sheet to label by hand
-python -m mood_tracker.validate evaluate           # compares the model with your labels
+python -m mood_tracker.validate evaluate --model gemma4:latest --split dev   # tune on the first 60 rows
+python -m mood_tracker.validate evaluate --model gemma4:latest --split test  # report on the rest
 ```
 
 ## Data

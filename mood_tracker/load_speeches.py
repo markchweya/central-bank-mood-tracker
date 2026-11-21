@@ -95,7 +95,11 @@ def clean_speeches(raw: pd.DataFrame) -> pd.DataFrame:
 
     speeches["institution"] = speeches["description"].str.extract(INSTITUTION_PATTERN)[0]
     speeches["country"] = speeches["institution"].map(INSTITUTION_COUNTRY)
-    speeches["speech_id"] = speeches["url"].str.extract(r"/review/(\w+)\.pdf")[0]
+    # The last URL segment is the BIS id: review/r230320b.pdf, review/r131024b.htm,
+    # or speeches/20260817-ai-and-monetary-policy for the newest ones.
+    speeches["speech_id"] = speeches["url"].str.extract(r"/([^/]+?)(?:\.pdf|\.htm)?$")[0]
+    if speeches["speech_id"].isna().any() or speeches["speech_id"].duplicated().any():
+        raise ValueError("Speech URLs no longer give a unique id; update the speech_id pattern")
     speeches["n_chars"] = speeches["text"].str.len()
 
     columns = ["speech_id", "date", "speaker", "institution", "country",

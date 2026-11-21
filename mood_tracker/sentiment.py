@@ -30,31 +30,41 @@ MAX_PARAGRAPH_CHARS = 2000
 # v1: one question, two labels (22% stance accuracy with llama3.2:3b).
 # v2: topic first, then leaning, with worked examples. The topic gates the labels,
 #     so a paragraph about payments or regulation cannot get a policy stance.
-PROMPT_VERSION = "v2"
+# v3: the single "main topic" choice became two yes/no questions. In v2 both models
+#     marked policy-framework paragraphs as off-topic and missed outlooks in paragraphs
+#     about risks or crises because those were not "mainly" about growth. Tuned in two
+#     rounds on the 60 dev rows only.
+PROMPT_VERSION = "v3"
 
-TOPICS = ("monetary_policy", "economy", "both", "other")
+YES_NO = ("yes", "no")
 
 SYSTEM_PROMPT = """You label paragraphs from central bank speeches for an economic research dataset.
 
-Answer in three steps.
+Answer four questions.
 
-1. topic: what is the paragraph mainly about?
-- monetary_policy: interest rates, the policy stance, inflation, or the inflation target.
-- economy: growth, output, jobs, demand, or the economic outlook, without discussing policy.
-- both: monetary policy or inflation AND the state of the economy.
-- other: anything else. Banking supervision, regulation, payments, financial inclusion,
-  fintech, climate, institutional history, statistics, thanks to hosts, references.
-  Most paragraphs in central bank speeches are "other".
+1. policy: does the paragraph discuss monetary policy? "yes" if it is about interest rates,
+   inflation or the inflation target, the policy stance or outlook, policy tools (asset
+   purchases, reserves, operations, forward guidance), or how policy is set and explained
+   (strategy, framework, communication, independence). "no" for banking supervision,
+   regulation, payments, financial inclusion, fintech, climate, history, statistics,
+   thanks to hosts or references.
 
-2. stance (only if topic is monetary_policy or both, otherwise "none"):
+2. stance (only if policy is "yes", otherwise "none"):
 - hawkish: argues for higher rates or tighter policy, or warns that inflation is too high or rising.
 - dovish: argues for lower rates, looser or accommodative policy, stimulus, or warns that
   inflation is too low, demand is weak, or deflation is a risk.
-- neutral: describes policy or inflation without arguing for tighter or looser policy.
+- neutral: explains or describes policy without arguing for tighter or looser policy.
+  Any mention of deflation, weak demand, easing or support for the economy is dovish, not neutral.
 
-3. outlook (only if topic is economy or both, otherwise "none"):
-- positive: growth is solid or improving, conditions are favourable.
-- negative: growth is weak or falling, a recession or crisis, risks are rising.
+3. economy: does the paragraph make a claim about how the economy is doing or where it is
+   heading? "yes" when it says growth, output, jobs, demand or trade are strong, weak,
+   improving or worsening, or names a crisis, recession, shock or rising risk to the economy,
+   even in one sentence. "no" when the economy is only mentioned in passing, or the paragraph
+   explains how policy or markets work without saying how the economy is doing.
+
+4. outlook (only if economy is "yes", otherwise "none"):
+- positive: growth is solid or improving, conditions are favourable, a recovery is under way.
+- negative: growth is weak or falling, a recession, crisis or shock, or risks to growth are rising.
 - neutral: mixed or no clear direction.
 
 Judge only what the paragraph says, not what you know about the period."""
@@ -63,31 +73,38 @@ Judge only what the paragraph says, not what you know about the period."""
 EXAMPLES = [
     ("Inflation has stayed well above our 2 percent target and wage growth is accelerating. "
      "The Committee therefore judged that a further increase in the policy rate was warranted.",
-     {"topic": "monetary_policy", "stance": "hawkish", "outlook": "none"}),
+     {"policy": "yes", "stance": "hawkish", "economy": "no", "outlook": "none"}),
     ("With inflation running below target and unemployment rising, we lowered the policy rate "
      "and will keep monetary conditions accommodative to support the recovery.",
-     {"topic": "both", "stance": "dovish", "outlook": "negative"}),
+     {"policy": "yes", "stance": "dovish", "economy": "yes", "outlook": "negative"}),
     ("Real GDP grew by 3.1 percent last year, driven by strong exports and household "
      "consumption, and we expect a similar pace this year.",
-     {"topic": "economy", "stance": "none", "outlook": "positive"}),
+     {"policy": "no", "stance": "none", "economy": "yes", "outlook": "positive"}),
     ("The new capital requirements will strengthen the resilience of banks, and supervisors "
      "will monitor their implementation closely.",
-     {"topic": "other", "stance": "none", "outlook": "none"}),
+     {"policy": "no", "stance": "none", "economy": "no", "outlook": "none"}),
     ("Let me thank the organisers for inviting me to this conference on digital payments.",
-     {"topic": "other", "stance": "none", "outlook": "none"}),
-    ("The policy rate is set eight times a year, and the decision is explained in a press "
-     "release and a monetary policy report.",
-     {"topic": "monetary_policy", "stance": "neutral", "outlook": "none"}),
+     {"policy": "no", "stance": "none", "economy": "no", "outlook": "none"}),
+    ("Lower interest rates make borrowing cheaper, which supports spending by households and "
+     "firms; this is the main channel through which monetary policy affects the economy.",
+     {"policy": "yes", "stance": "neutral", "economy": "no", "outlook": "none"}),
+    ("Publishing the minutes of our policy meetings helps the public understand how the "
+     "Board weighs the arguments, and it makes us accountable for our decisions.",
+     {"policy": "yes", "stance": "neutral", "economy": "no", "outlook": "none"}),
+    ("Banks have adjusted well to the new rules. Still, an escalation of trade disputes would "
+     "hit exports and investment, and that risk has grown in recent months.",
+     {"policy": "no", "stance": "none", "economy": "yes", "outlook": "negative"}),
 ]
 
 OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "topic": {"type": "string", "enum": list(TOPICS)},
+        "policy": {"type": "string", "enum": list(YES_NO)},
         "stance": {"type": "string", "enum": list(STANCE_LABELS)},
+        "economy": {"type": "string", "enum": list(YES_NO)},
         "outlook": {"type": "string", "enum": list(OUTLOOK_LABELS)},
     },
-    "required": ["topic", "stance", "outlook"],
+    "required": ["policy", "stance", "economy", "outlook"],
     "additionalProperties": False,
 }
 
@@ -100,15 +117,17 @@ class Label:
 
 def parse_label(raw: str) -> Label:
     data = json.loads(raw)
-    topic, stance, outlook = data.get("topic"), data.get("stance"), data.get("outlook")
-    if topic not in TOPICS or stance not in STANCE_LABELS or outlook not in OUTLOOK_LABELS:
+    policy, economy = data.get("policy"), data.get("economy")
+    stance, outlook = data.get("stance"), data.get("outlook")
+    if (policy not in YES_NO or economy not in YES_NO
+            or stance not in STANCE_LABELS or outlook not in OUTLOOK_LABELS):
         raise ValueError(f"Unexpected labels in model output: {raw!r}")
-    # The topic gates the labels, whatever the model put in the other fields.
-    if topic not in ("monetary_policy", "both"):
+    # The yes/no answers gate the labels, whatever the model put in the other fields.
+    if policy == "no":
         stance = "none"
     elif stance == "none":
         stance = "neutral"
-    if topic not in ("economy", "both"):
+    if economy == "no":
         outlook = "none"
     elif outlook == "none":
         outlook = "neutral"

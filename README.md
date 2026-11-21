@@ -28,7 +28,7 @@ It extends the method in the BIS paper [*Large language models: a primer for eco
 | Speech loader | done |
 | LLM sentiment scoring | done; checked against 200 reference labels |
 | Topic modelling | planned |
-| Monthly mood index | planned |
+| Monthly mood index | done (COBOL) |
 | Macro data and forecast test | planned |
 | Dashboard | planned |
 
@@ -62,6 +62,32 @@ Runs are resumable: stop with Ctrl+C and the same command carries on. To use Cla
 python -m mood_tracker.validate export --n 200     # writes a sheet to label by hand
 python -m mood_tracker.validate evaluate --model gemma4:latest --split dev   # tune on the first 60 rows
 python -m mood_tracker.validate evaluate --model gemma4:latest --split test  # report on the rest
+```
+
+### Build the mood index (COBOL)
+
+The index is built by [`cobol/MOODIDX.cbl`](cobol/MOODIDX.cbl), a fixed-format COBOL batch job. It validates each scored paragraph, sorts by country and month, and does a two-level control break to write one line per country-month:
+
+- **stance index** = (hawkish - dovish) / paragraphs with a stance label, from -1 (dovish) to +1 (hawkish)
+- **outlook index** = (positive - negative) / paragraphs with an outlook label, from -1 (gloomy) to +1 (upbeat)
+
+It also prints a summary report per country. Install [GnuCOBOL](https://gnucobol.sourceforge.io) 3.x:
+
+- **Windows:** in an [MSYS2](https://www.msys2.org) shell, run `pacman -S mingw-w64-ucrt-x86_64-gnucobol`
+- **macOS:** `brew install gnucobol`
+- **Debian/Ubuntu:** `sudo apt install gnucobol`
+
+Then:
+
+```bash
+python -m mood_tracker.mood_index    # compiles MOODIDX if needed, runs it, writes data/index/
+```
+
+Tests check the COBOL output against an independent pandas calculation:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
 ```
 
 ## Data
